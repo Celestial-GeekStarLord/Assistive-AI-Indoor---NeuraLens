@@ -31,7 +31,8 @@ class AccessibilityAssistant:
         """Initialize the accessibility assistant"""
         # Configure Gemini API with new package
         self.client = genai.Client(api_key=api_key)
-        self.model_name = 'gemini-2.0-flash-exp'  # or 'gemini-1.5-flash' or 'gemini-1.5-pro'
+        # Use gemini-2.5-flash - latest and most capable model
+        self.model_name = 'gemini-2.5-flash'
         
         # Initialize speech recognition
         self.recognizer = sr.Recognizer()
