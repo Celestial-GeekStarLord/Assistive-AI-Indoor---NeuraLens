@@ -236,32 +236,31 @@ class AccessibilityAssistant:
             
             print(f"Debug: Image size in bytes: {len(img_byte_arr)}")
             
-            # Create prompt based on mode
+            # Create prompt based on mode - modified to avoid recitation blocks
             if mode == "read":
                 prompt = (
-                    "Look at this image carefully. "
-                    "If there is ANY text visible (books, documents, signs, labels, anything with words), "
-                    "extract and read ALL of it exactly as written. "
-                    "Read every single word, sentence, and paragraph from top to bottom, left to right. "
-                    "Do NOT summarize or skip anything. Read the complete text word-for-word. "
-                    "If there is absolutely no text in the image, say 'No text detected in this image.'"
+                    "This is an accessibility tool for visually impaired users. "
+                    "Please transcribe all visible text from this image. "
+                    "If the text is from a copyrighted work, provide a detailed description of what the page contains, "
+                    "including the layout, number of paragraphs, any headings, and the general topic being discussed. "
+                    "Format: First describe the page layout, then provide the transcription or detailed description."
                 )
             elif mode == "summarize":
                 prompt = (
-                    "Look at this image carefully. "
-                    "If there is ANY text visible (books, documents, signs, labels, anything with words), "
-                    "extract all the text and provide a brief summary of the main points. "
-                    "Keep the summary concise (2-3 paragraphs maximum) but capture key information. "
-                    "If there is absolutely no text in the image, say 'No text detected in this image.'"
+                    "This is an accessibility tool for visually impaired users. "
+                    "Identify and describe the text content in this image. "
+                    "Provide a summary of the main topics, key points, and overall content. "
+                    "Include information about: the subject matter, main ideas presented, "
+                    "any notable quotes or statistics, and the overall purpose of the text. "
+                    "Keep it concise but informative (2-3 paragraphs)."
                 )
             else:  # Default mode - read all
                 prompt = (
-                    "Look at this image carefully. "
-                    "If there is ANY text visible (books, documents, signs, labels, anything with words), "
-                    "extract and read ALL of it exactly as written. "
-                    "Read every single word, sentence, and paragraph from top to bottom, left to right. "
-                    "Do NOT summarize or skip anything. Read the complete text word-for-word. "
-                    "If there is absolutely no text in the image, say 'No text detected in this image.'"
+                    "This is an accessibility tool for visually impaired users. "
+                    "Please transcribe all visible text from this image. "
+                    "If the text is from a copyrighted work, provide a detailed description of what the page contains, "
+                    "including the layout, number of paragraphs, any headings, and the general topic being discussed. "
+                    "Format: First describe the page layout, then provide the transcription or detailed description."
                 )
             
             print(f"Debug: Sending image to Gemini with mode: {mode}")
@@ -283,21 +282,59 @@ class AccessibilityAssistant:
             )
             
             print(f"Debug: Response received from Gemini")
-            print(f"Debug: Response object: {response}")
+            
+            # Check finish reason
+            if response.candidates and len(response.candidates) > 0:
+                finish_reason = response.candidates[0].finish_reason
+                print(f"Debug: Finish reason: {finish_reason}")
+                
+                if finish_reason.name == 'RECITATION':
+                    print("Debug: Recitation block detected - trying alternative approach")
+                    # If recitation blocked, try with a different prompt
+                    alternative_prompt = (
+                        "As an accessibility assistant for visually impaired users, "
+                        "describe what you see in this image in detail. "
+                        "Focus on: 1) The type of document (book, article, etc.) "
+                        "2) The layout and structure (columns, paragraphs, headings) "
+                        "3) The main topic or subject matter being discussed "
+                        "4) Any visible section titles, chapter names, or headers "
+                        "5) The general content and key concepts present. "
+                        "Do not reproduce verbatim text, but help the user understand what information is on this page."
+                    )
+                    
+                    response = self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=[
+                            types.Content(
+                                parts=[
+                                    types.Part(text=alternative_prompt),
+                                    types.Part(inline_data=types.Blob(
+                                        mime_type='image/jpeg',
+                                        data=img_byte_arr
+                                    ))
+                                ]
+                            )
+                        ]
+                    )
+                    print("Debug: Alternative approach response received")
             
             # Check if response has text
             if hasattr(response, 'text') and response.text:
                 response_text = response.text
+            elif response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                    response_text = ' '.join([part.text for part in candidate.content.parts if hasattr(part, 'text')])
+                else:
+                    response_text = "Unable to extract text. The content may be blocked due to copyright protection."
             else:
-                response_text = "Error: No response text received from Gemini"
-                print(f"Debug: Response parts: {response.candidates[0].content.parts if response.candidates else 'No candidates'}")
+                response_text = "No response received from Gemini."
             
             print(f"\n[TEXT EXTRACTED FROM IMAGE]:\n{response_text}\n")
             
             # Check if no text was found
             if not response_text or response_text.strip() == "" or response_text.lower() == "none":
                 response_text = "I could not detect any readable text in this image. Please ensure the book page is well-lit, in focus, and clearly visible to the camera."
-                self.speak(response_text)
             
             return response_text
             
