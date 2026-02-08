@@ -5,3 +5,7 @@ opencv-python>=4.8.0
 Pillow>=10.0.0
 PyAudio>=0.2.13
 keyboard>=0.13.5
+
+
+
+pip install google-genai
