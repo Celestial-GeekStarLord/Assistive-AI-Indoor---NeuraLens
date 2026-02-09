@@ -17,9 +17,9 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-# ==============================
+
 # LOAD ENV
-# ==============================
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -30,18 +30,18 @@ except:
 class AccessibilityAssistant:
     def __init__(self, api_key):
 
-        # ==============================
+        
         # GEMINI
-        # ==============================
+        
         self.client = genai.Client(api_key=api_key)
         self.model_name = "gemini-2.5-flash"
 
         self.is_running = True
         self.voice_muted = False
 
-        # ==============================
+        
         # TTS
-        # ==============================
+        
         self.tts = pyttsx3.init(driverName="espeak")
 
         for v in self.tts.getProperty("voices"):
@@ -51,15 +51,15 @@ class AccessibilityAssistant:
 
         self.tts.setProperty("rate", 165)
 
-        # ==============================
+        
         # SPEECH RECOGNITION
-        # ==============================
+        
         self.recognizer = sr.Recognizer()
         self.mic = sr.Microphone()
 
-        # ==============================
+        
         # USB CAMERA
-        # ==============================
+        
         self.camera = cv2.VideoCapture(0)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -74,15 +74,14 @@ class AccessibilityAssistant:
         self.output("V = voice | C = scene | B = read | M = mute | Q = quit")
         self.speak("Accessibility assistant is ready.")
 
-    # ==============================
+    
     # CLEAN RESPONSE (REMOVE *)
-    # ==============================
     def clean_response(self, text):
         return text.replace("*", "")
 
-    # ==============================
+   
     # VOICE OUTPUT
-    # ==============================
+ 
     def speak(self, text):
         if self.voice_muted:
             return
@@ -97,18 +96,18 @@ class AccessibilityAssistant:
         if not self.voice_muted:
             self.speak("Voice unmuted")
 
-    # ==============================
+   
     # OUTPUT
-    # ==============================
+   
     def output(self, text):
         text = self.clean_response(text)
         print("\n" + "=" * 60)
         print(text)
         print("=" * 60 + "\n")
 
-    # ==============================
+  
     # CAPTURE IMAGE
-    # ==============================
+  
     def capture_image(self):
         if self.camera is None:
             self.output("Camera not available.")
@@ -125,9 +124,9 @@ class AccessibilityAssistant:
 
         return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-    # ==============================
+   
     # VOICE INPUT
-    # ==============================
+   
     def listen(self):
         with self.mic as source:
             self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
@@ -155,9 +154,9 @@ class AccessibilityAssistant:
             self.speak("Sorry, I did not understand.")
             return None
 
-    # ==============================
+   
     # GEMINI
-    # ==============================
+   
     def ask_gemini_text(self, text):
         prompt = (
             "You are assisting a visually impaired person. "
@@ -197,9 +196,9 @@ class AccessibilityAssistant:
         )
         return response.text
 
-    # ==============================
+
     # MODES
-    # ==============================
+    
     def run(self):
         while self.is_running:
             cmd = input("v / c / b / m / q: ").strip().lower()
@@ -238,9 +237,9 @@ class AccessibilityAssistant:
         cv2.destroyAllWindows()
 
 
-# ==============================
+
 # MAIN
-# ==============================
+
 def main():
     api_key = os.getenv("GEMINI_API_KEY")
 
