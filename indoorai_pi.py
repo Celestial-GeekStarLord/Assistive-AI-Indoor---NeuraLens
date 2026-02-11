@@ -17,9 +17,9 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-
+# ==============================
 # LOAD ENV
-
+# ==============================
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -30,18 +30,18 @@ except:
 class AccessibilityAssistant:
     def __init__(self, api_key):
 
-        
+        # ==============================
         # GEMINI
-        
+        # ==============================
         self.client = genai.Client(api_key=api_key)
         self.model_name = "gemini-2.5-flash"
 
         self.is_running = True
         self.voice_muted = False
 
-        
+        # ==============================
         # TTS
-        
+        # ==============================
         self.tts = pyttsx3.init(driverName="espeak")
 
         for v in self.tts.getProperty("voices"):
@@ -51,15 +51,62 @@ class AccessibilityAssistant:
 
         self.tts.setProperty("rate", 165)
 
-        
+        # ==============================
         # SPEECH RECOGNITION
-        
+        # ==============================
         self.recognizer = sr.Recognizer()
-        self.mic = sr.Microphone()
+        
+        # Adjust recognition settings for better performance
+        self.recognizer.energy_threshold = 100  # Lower threshold for USB mic
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
+        self.recognizer.pause_threshold = 0.8
+        self.recognizer.phrase_threshold = 0.3
+        self.recognizer.non_speaking_duration = 0.5
+        
+        # Find USB microphone - specifically looking for USB2.0 PC CAMERA
+        print("\n" + "=" * 60)
+        print("Available Microphones:")
+        print("=" * 60)
+        mic_index = None
+        mic_list = sr.Microphone.list_microphone_names()
+        
+        for index, name in enumerate(mic_list):
+            print(f"  [{index}] {name}")
+            # Look for USB camera microphone
+            if any(keyword in name.lower() for keyword in ["usb", "camera", "pc camera", "usb2.0"]):
+                mic_index = index
+                print(f"  ✅ AUTO-SELECTED: {name}")
+        
+        print("=" * 60)
+        
+        # If not found automatically, try to find card 3
+        if mic_index is None:
+            for index, name in enumerate(mic_list):
+                if "card 3" in name.lower() or "hw:3" in name.lower():
+                    mic_index = index
+                    print(f"  ✅ FOUND CARD 3: {name}")
+                    break
+        
+        # Initialize microphone WITHOUT sample_rate to use device default
+        if mic_index is not None:
+            try:
+                self.mic = sr.Microphone(device_index=mic_index)
+                print(f"✅ Using USB microphone at index {mic_index}")
+            except Exception as e:
+                print(f"⚠ Error with index {mic_index}: {e}")
+                self.mic = sr.Microphone()
+                print("✅ Using default microphone")
+        else:
+            self.mic = sr.Microphone()
+            print("✅ Using default microphone")
+        
+        print("=" * 60 + "\n")
 
-        
+        # ==============================
         # USB CAMERA
-        
+        # ==============================
         self.camera = cv2.VideoCapture(0)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -74,14 +121,15 @@ class AccessibilityAssistant:
         self.output("V = voice | C = scene | B = read | M = mute | Q = quit")
         self.speak("Accessibility assistant is ready.")
 
-    
+    # ==============================
     # CLEAN RESPONSE (REMOVE *)
+    # ==============================
     def clean_response(self, text):
         return text.replace("*", "")
 
-   
+    # ==============================
     # VOICE OUTPUT
- 
+    # ==============================
     def speak(self, text):
         if self.voice_muted:
             return
@@ -96,18 +144,18 @@ class AccessibilityAssistant:
         if not self.voice_muted:
             self.speak("Voice unmuted")
 
-   
+    # ==============================
     # OUTPUT
-   
+    # ==============================
     def output(self, text):
         text = self.clean_response(text)
         print("\n" + "=" * 60)
         print(text)
         print("=" * 60 + "\n")
 
-  
+    # ==============================
     # CAPTURE IMAGE
-  
+    # ==============================
     def capture_image(self):
         if self.camera is None:
             self.output("Camera not available.")
@@ -124,39 +172,61 @@ class AccessibilityAssistant:
 
         return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-   
+    # ==============================
     # VOICE INPUT
-   
+    # ==============================
     def listen(self):
-        with self.mic as source:
-            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-            self.output("🎙 Listening...")
-            audio = self.recognizer.listen(source)
+        try:
+            with self.mic as source:
+                print("🔧 Calibrating microphone... (please be quiet)")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1.5)
+                print(f"   Energy threshold set to: {self.recognizer.energy_threshold}")
+                self.output("🎙 Listening... (Speak clearly and loudly!)")
+                
+                try:
+                    # Increase timeout and phrase limit
+                    audio = self.recognizer.listen(source, timeout=15, phrase_time_limit=15)
+                    print("🔄 Audio captured, sending to Google...")
+                except sr.WaitTimeoutError:
+                    self.output("⏱ Timeout - no speech detected. Try speaking louder.")
+                    return None
+
+        except Exception as e:
+            self.output(f"❌ Microphone error: {e}")
+            return None
 
         try:
-            text = self.recognizer.recognize_google(audio).lower()
+            # Send to Google for recognition
+            text = self.recognizer.recognize_google(audio, language="en-US").lower()
             self.output(f"🗣 You said: {text}")
 
-            if "mute" in text:
+            if "mute" in text or "mute voice" in text:
                 self.voice_muted = True
                 self.output("🔇 Voice muted")
                 return None
 
-            if "unmute" in text:
+            if "unmute" in text or "unmute voice" in text:
                 self.voice_muted = False
                 self.speak("Voice unmuted")
                 return None
 
             return text
 
-        except:
-            self.output("❌ Could not understand.")
+        except sr.UnknownValueError:
+            self.output("❌ Could not understand the audio. Speak louder and clearer.")
             self.speak("Sorry, I did not understand.")
             return None
+        except sr.RequestError as e:
+            self.output(f"❌ Google Speech Recognition error: {e}")
+            self.output("   Check your internet connection.")
+            return None
+        except Exception as e:
+            self.output(f"❌ Unexpected error: {e}")
+            return None
 
-   
+    # ==============================
     # GEMINI
-   
+    # ==============================
     def ask_gemini_text(self, text):
         prompt = (
             "You are assisting a visually impaired person. "
@@ -196,9 +266,9 @@ class AccessibilityAssistant:
         )
         return response.text
 
-
+    # ==============================
     # MODES
-    
+    # ==============================
     def run(self):
         while self.is_running:
             cmd = input("v / c / b / m / q: ").strip().lower()
@@ -237,9 +307,9 @@ class AccessibilityAssistant:
         cv2.destroyAllWindows()
 
 
-
+# ==============================
 # MAIN
-
+# ==============================
 def main():
     api_key = os.getenv("GEMINI_API_KEY")
 
