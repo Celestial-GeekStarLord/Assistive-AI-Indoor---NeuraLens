@@ -1,333 +1,172 @@
 #!/usr/bin/env python3
-"""
-Accessibility Assistant (USB Camera + Gemini + Voice)
-Raspberry Pi 4 – Earphone Mic & Speaker Supported
-Mute voice: press M (menu) or say "mute voice"
-"""
-
-import os
-import sys
-import time
-import io
-import cv2
-import select
+import os, sys, time, io, cv2, signal
 import speech_recognition as sr
 import pyttsx3
+import RPi.GPIO as GPIO
 from PIL import Image
 from google import genai
 from google.genai import types
 
+# ================= GPIO =================
+BTN_MAIN = 17
+BTN_BACK = 27
+HOLD_TIME = 1.2
 
-# LOAD ENV
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(BTN_MAIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(BTN_BACK, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except:
-    pass
+def wait_press(pin):
+    while GPIO.input(pin) == GPIO.LOW:
+        time.sleep(0.01)
+    start=time.time()
+    while GPIO.input(pin)==GPIO.HIGH:
+        time.sleep(0.01)
+    return "hold" if time.time()-start>HOLD_TIME else "tap"
 
 
 class AccessibilityAssistant:
     def __init__(self, api_key):
 
-        
-        # GEMINI
-        
+        # ===== Gemini =====
         self.client = genai.Client(api_key=api_key)
-        self.model_name = "gemini-2.5-flash"
+        self.model_name="gemini-2.5-flash"
 
-        self.is_running = True
-        self.voice_muted = False
+        self.tts=pyttsx3.init(driverName="espeak")
+        self.tts.setProperty("rate",165)
 
-        
-        # TTS
-        
-        self.tts = pyttsx3.init(driverName="espeak")
+        # ===== Mic =====
+        self.recognizer=sr.Recognizer()
+        self.mic=sr.Microphone()
 
-        for v in self.tts.getProperty("voices"):
-            if "en-us" in v.id.lower():
-                self.tts.setProperty("voice", v.id)
-                break
-
-        self.tts.setProperty("rate", 165)
-
-        
-        # SPEECH RECOGNITION
-        
-        self.recognizer = sr.Recognizer()
-        
-        # Adjust recognition settings for better performance
-        self.recognizer.energy_threshold = 100  # Lower threshold for USB mic
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.15
-        self.recognizer.dynamic_energy_ratio = 1.5
-        self.recognizer.pause_threshold = 0.8
-        self.recognizer.phrase_threshold = 0.3
-        self.recognizer.non_speaking_duration = 0.5
-        
-        # Find USB microphone - specifically looking for USB2.0 PC CAMERA
-        print("\n" + "=" * 60)
-        print("Available Microphones:")
-        print("=" * 60)
-        mic_index = None
-        mic_list = sr.Microphone.list_microphone_names()
-        
-        for index, name in enumerate(mic_list):
-            print(f"  [{index}] {name}")
-            # Look for USB camera microphone
-            if any(keyword in name.lower() for keyword in ["usb", "camera", "pc camera", "usb2.0"]):
-                mic_index = index
-                print(f"  ✅ AUTO-SELECTED: {name}")
-        
-        print("=" * 60)
-        
-        # If not found automatically, try to find card 3
-        if mic_index is None:
-            for index, name in enumerate(mic_list):
-                if "card 3" in name.lower() or "hw:3" in name.lower():
-                    mic_index = index
-                    print(f"  ✅ FOUND CARD 3: {name}")
-                    break
-        
-        # Initialize microphone WITHOUT sample_rate to use device default
-        if mic_index is not None:
-            try:
-                self.mic = sr.Microphone(device_index=mic_index)
-                print(f"✅ Using USB microphone at index {mic_index}")
-            except Exception as e:
-                print(f"⚠ Error with index {mic_index}: {e}")
-                self.mic = sr.Microphone()
-                print("✅ Using default microphone")
-        else:
-            self.mic = sr.Microphone()
-            print("✅ Using default microphone")
-        
-        print("=" * 60 + "\n")
-
-        
-        # USB CAMERA
-        
-        self.camera = cv2.VideoCapture(0)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
+        # ===== Camera =====
+        self.camera=cv2.VideoCapture(0)
         if not self.camera.isOpened():
-            self.camera = None
-            self.output("⚠ USB camera not available.")
+            self.camera=None
+            self.speak("Camera not available")
         else:
-            self.output("✅ USB camera connected.")
+            self.speak("Camera ready")
 
-        self.output("Accessibility Assistant Ready.")
-        self.output("V = voice | C = scene | B = read | M = mute | Q = quit")
-        self.speak("Accessibility assistant is ready.")
+        # modes
+        self.modes=["voice","capture","book"]
+        self.mode_index=0
 
-    
-    # CLEAN RESPONSE (REMOVE *)
-    
-    def clean_response(self, text):
-        return text.replace("*", "")
+        self.speak("Assistant ready")
+        self.announce_mode()
 
-    
-    # VOICE OUTPUT
-    
-    def speak(self, text):
-        if self.voice_muted:
-            return
-        text = self.clean_response(text)
+    # ---------- SPEECH ----------
+    def speak(self,text):
+        print(text)
         self.tts.say(text)
         self.tts.runAndWait()
 
-    def toggle_mute(self):
-        self.voice_muted = not self.voice_muted
-        state = "muted" if self.voice_muted else "unmuted"
-        self.output(f"🔇 Voice {state}")
-        if not self.voice_muted:
-            self.speak("Voice unmuted")
+    def announce_mode(self):
+        self.speak(self.modes[self.mode_index]+" mode")
 
-    
-    # OUTPUT
-    
-    def output(self, text):
-        text = self.clean_response(text)
-        print("\n" + "=" * 60)
-        print(text)
-        print("=" * 60 + "\n")
+    # ---------- GEMINI ----------
+    def ask_text(self,q):
+        prompt="Assist a visually impaired person briefly.\n"+q
+        return self.client.models.generate_content(
+            model=self.model_name,contents=prompt).text
 
-    
-    # CAPTURE IMAGE
-    
-    def capture_image(self):
-        if self.camera is None:
-            self.output("Camera not available.")
-            return None
+    def ask_image(self,img,mode):
+        buf=io.BytesIO()
+        img.save(buf,format="JPEG")
+        prompts={
+            "capture":"List objects briefly.",
+            "book":"Read all visible text."
+        }
+        r=self.client.models.generate_content(
+            model=self.model_name,
+            contents=[types.Content(parts=[
+                types.Part(text=prompts[mode]),
+                types.Part(inline_data=types.Blob(
+                    mime_type="image/jpeg",data=buf.getvalue()))
+            ])])
+        return r.text
 
-        time.sleep(0.5)
-        for _ in range(8):
-            self.camera.read()
-
-        ret, frame = self.camera.read()
-        if not ret:
-            self.output("Failed to capture image.")
-            return None
-
-        return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
-    
-    # VOICE INPUT
-    
+    # ---------- LISTEN ----------
     def listen(self):
         try:
-            with self.mic as source:
-                print("🔧 Calibrating microphone... (please be quiet)")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1.5)
-                print(f"   Energy threshold set to: {self.recognizer.energy_threshold}")
-                self.output("🎙 Listening... (Speak clearly and loudly!)")
-                
-                try:
-                    # Increase timeout and phrase limit
-                    audio = self.recognizer.listen(source, timeout=15, phrase_time_limit=15)
-                    print("🔄 Audio captured, sending to Google...")
-                except sr.WaitTimeoutError:
-                    self.output("⏱ Timeout - no speech detected. Try speaking louder.")
-                    return None
-
-        except Exception as e:
-            self.output(f"❌ Microphone error: {e}")
+            with self.mic as src:
+                self.speak("Listening")
+                audio=self.recognizer.listen(src,timeout=15,phrase_time_limit=15)
+            return self.recognizer.recognize_google(audio).lower()
+        except:
+            self.speak("Sorry I did not understand")
             return None
 
-        try:
-            # Send to Google for recognition
-            text = self.recognizer.recognize_google(audio, language="en-US").lower()
-            self.output(f"🗣 You said: {text}")
+    # ---------- CAMERA ----------
+    def capture(self):
+        if not self.camera: return None
+        for _ in range(5): self.camera.read()
+        ok,frame=self.camera.read()
+        if not ok: return None
+        return Image.fromarray(cv2.cvtColor(frame,cv2.COLOR_BGR2RGB))
 
-            if "mute" in text or "mute voice" in text:
-                self.voice_muted = True
-                self.output("🔇 Voice muted")
-                return None
-
-            if "unmute" in text or "unmute voice" in text:
-                self.voice_muted = False
-                self.speak("Voice unmuted")
-                return None
-
-            return text
-
-        except sr.UnknownValueError:
-            self.output("❌ Could not understand the audio. Speak louder and clearer.")
-            self.speak("Sorry, I did not understand.")
-            return None
-        except sr.RequestError as e:
-            self.output(f"❌ Google Speech Recognition error: {e}")
-            self.output("   Check your internet connection.")
-            return None
-        except Exception as e:
-            self.output(f"❌ Unexpected error: {e}")
-            return None
-
-    
-    # GEMINI
-    
-    def ask_gemini_text(self, text):
-        prompt = (
-            "You are assisting a visually impaired person. "
-            "Answer clearly, briefly, and practically.\n"
-            f"Question: {text}"
-        )
-        return self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        ).text
-
-    def ask_gemini_image(self, image, mode):
-        buf = io.BytesIO()
-        image.save(buf, format="JPEG")
-
-        prompts = {
-            "scene": "List main visible objects and summarize briefly.",
-            "read": "Read all visible text clearly.",
-            "summarize": "Summarize text into short bullet points."
-        }
-
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=[
-                types.Content(
-                    parts=[
-                        types.Part(text=prompts[mode]),
-                        types.Part(
-                            inline_data=types.Blob(
-                                mime_type="image/jpeg",
-                                data=buf.getvalue()
-                            )
-                        )
-                    ]
-                )
-            ],
-        )
-        return response.text
-
-    
-    # MODES
-    
+    # ---------- RUN LOOP ----------
     def run(self):
-        while self.is_running:
-            cmd = input("v / c / b / m / q: ").strip().lower()
 
-            if cmd == "v":
-                text = self.listen()
-                if text:
-                    ans = self.ask_gemini_text(text)
-                    self.output(ans)
-                    self.speak(ans)
+        while True:
 
-            elif cmd == "c":
-                img = self.capture_image()
-                if img:
-                    ans = self.ask_gemini_image(img, "scene")
-                    self.output(ans)
-                    self.speak(ans)
+            # BACK button quits program
+            if GPIO.input(BTN_BACK)==GPIO.HIGH:
+                wait_press(BTN_BACK)
+                self.speak("Exiting assistant")
+                break
 
-            elif cmd == "b":
-                img = self.capture_image()
-                if img:
-                    ans = self.ask_gemini_image(img, "read")
-                    self.output(ans)
-                    self.speak(ans)
+            # MAIN button
+            if GPIO.input(BTN_MAIN)==GPIO.HIGH:
+                action=wait_press(BTN_MAIN)
 
-            elif cmd == "m":
-                self.toggle_mute()
+                # TAP → change mode
+                if action=="tap":
+                    self.mode_index=(self.mode_index+1)%3
+                    self.announce_mode()
 
-            elif cmd == "q":
-                self.speak("Goodbye.")
-                self.is_running = False
+                # HOLD → run selected mode
+                else:
+                    mode=self.modes[self.mode_index]
+
+                    if mode=="voice":
+                        text=self.listen()
+                        if text:
+                            ans=self.ask_text(text)
+                            self.speak(ans)
+
+                    elif mode=="capture":
+                        img=self.capture()
+                        if img:
+                            ans=self.ask_image(img,"capture")
+                            self.speak(ans)
+
+                    elif mode=="book":
+                        img=self.capture()
+                        if img:
+                            ans=self.ask_image(img,"book")
+                            self.speak(ans)
+
+            time.sleep(0.05)
 
     def cleanup(self):
-        if self.camera:
-            self.camera.release()
-        cv2.destroyAllWindows()
+        if self.camera: self.camera.release()
+        GPIO.cleanup()
 
 
-
-# MAIN
-
+# ===== MAIN =====
 def main():
-    api_key = os.getenv("GEMINI_API_KEY")
+    api=os.getenv("GEMINI_API_KEY")
+    if not api and os.path.exists("config.txt"):
+        api=open("config.txt").read().strip()
+    if not api:
+        print("API key missing");sys.exit(1)
 
-    if not api_key and os.path.exists("config.txt"):
-        with open("config.txt") as f:
-            api_key = f.read().strip()
-
-    if not api_key:
-        print("❌ GEMINI_API_KEY required.")
-        sys.exit(1)
-
-    assistant = AccessibilityAssistant(api_key)
-
+    a=AccessibilityAssistant(api)
     try:
-        assistant.run()
+        a.run()
     finally:
-        assistant.cleanup()
+        a.cleanup()
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
