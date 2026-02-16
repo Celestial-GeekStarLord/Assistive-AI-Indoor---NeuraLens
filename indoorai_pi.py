@@ -55,7 +55,7 @@ def speak(text):
             )
             
             aplay_process = subprocess.Popen(
-                ['aplay', '-D', 'plughw:1,0'],
+                ['aplay'],
                 stdin=speech_process.stdout,
                 stderr=subprocess.DEVNULL
             )
